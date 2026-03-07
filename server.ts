@@ -14,8 +14,6 @@ const ALGOD_PORT = "";
 const ALGOD_TOKEN = "";
 const algodClient = new algosdk.Algodv2(ALGOD_TOKEN, ALGOD_SERVER, ALGOD_PORT);
 
-const SAVINGS_VAULT_ADDRESS = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAY5HDS7A";
-
 // Initialize Database
 db.exec(`
   CREATE TABLE IF NOT EXISTS products (
@@ -42,27 +40,6 @@ db.exec(`
     FOREIGN KEY(product_id) REFERENCES products(id)
   );
 
-  CREATE TABLE IF NOT EXISTS savings_goals (
-    id TEXT PRIMARY KEY,
-    user_address TEXT NOT NULL,
-    name TEXT NOT NULL,
-    target_amount REAL NOT NULL,
-    current_amount REAL DEFAULT 0,
-    deadline DATETIME,
-    status TEXT DEFAULT 'active',
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-  );
-
-  CREATE TABLE IF NOT EXISTS savings_deposits (
-    id TEXT PRIMARY KEY,
-    goal_id TEXT NOT NULL,
-    user_address TEXT NOT NULL,
-    amount REAL NOT NULL,
-    tx_id TEXT NOT NULL,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY(goal_id) REFERENCES savings_goals(id)
-  );
-
   CREATE TABLE IF NOT EXISTS tasks (
     id TEXT PRIMARY KEY,
     title TEXT NOT NULL,
@@ -75,6 +52,46 @@ db.exec(`
     proof_url TEXT,
     tx_id TEXT, -- Escrow deposit tx
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE TABLE IF NOT EXISTS expense_groups (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE TABLE IF NOT EXISTS group_participants (
+    group_id INTEGER,
+    address TEXT NOT NULL,
+    FOREIGN KEY(group_id) REFERENCES expense_groups(id)
+  );
+
+  CREATE TABLE IF NOT EXISTS expenses (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    group_id INTEGER,
+    description TEXT NOT NULL,
+    amount REAL NOT NULL,
+    payer_address TEXT NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(group_id) REFERENCES expense_groups(id)
+  );
+
+  CREATE TABLE IF NOT EXISTS expense_splits (
+    expense_id INTEGER,
+    address TEXT NOT NULL,
+    share REAL NOT NULL,
+    FOREIGN KEY(expense_id) REFERENCES expenses(id)
+  );
+
+  CREATE TABLE IF NOT EXISTS settlements (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    group_id INTEGER,
+    from_address TEXT NOT NULL,
+    to_address TEXT NOT NULL,
+    amount REAL NOT NULL,
+    tx_id TEXT NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(group_id) REFERENCES expense_groups(id)
   );
 `);
 
@@ -123,38 +140,20 @@ app.post("/api/orders", async (req, res) => {
     console.log(`Verifying transaction ${tx_id} on-chain...`);
     const txInfo = await algodClient.pendingTransactionInformation(tx_id).do();
     
-    const info = txInfo as any;
-    const signedTxn = info.txn || info.transaction;
-    const txn = (signedTxn ? (signedTxn.txn || signedTxn) : info) as any;
-    
-    const type = txn.type || txn.ty;
-    const isPayment = type === "pay" || (type instanceof Uint8Array && new TextDecoder().decode(type) === "pay");
-    
-    const getAddr = (val: any) => {
-      if (!val) return "";
-      if (typeof val === "string") return val;
-      try {
-        let pk = val.publicKey || val;
-        if (pk && typeof pk === 'object' && !(pk instanceof Uint8Array) && Object.keys(pk).length === 32) {
-          pk = new Uint8Array(Object.values(pk));
-        }
-        return algosdk.encodeAddress(pk);
-      } catch (e) { return ""; }
-    };
-
-    const sender = getAddr(txn.sender || txn.snd || txn.from);
-    const receiver = getAddr(txn.receiver || txn.rcv || txn.to);
-    const txAmount = txn.amount || txn.amt || 0;
-
-    const correctSender = sender === buyer_address;
-    const correctReceiver = receiver === seller_address;
-    const expectedMicroAlgos = Math.round(Number(amount) * 1_000_000);
-    const correctAmount = Math.abs(Number(txAmount) - expectedMicroAlgos) < 10;
+    // Basic verification: check if it's a payment, correct sender/receiver, and amount
+    const txn = txInfo.txn.txn as any;
+    const isPayment = txn.type === "pay";
+    const correctSender = algosdk.encodeAddress(txn.from.publicKey) === buyer_address;
+    const correctReceiver = algosdk.encodeAddress(txn.to.publicKey) === seller_address;
+    const correctAmount = Number(txn.amount) === Math.round(Number(amount) * 1_000_000);
 
     if (!isPayment || !correctSender || !correctReceiver || !correctAmount) {
-      console.error("Order verification failed:", { 
-        isPayment, sender, receiver, txAmount: txAmount.toString(),
-        expectedSender: buyer_address, expectedReceiver: seller_address, expectedAmount: expectedMicroAlgos
+      console.error("Transaction verification failed:", { 
+        isPayment, 
+        correctSender, 
+        correctReceiver, 
+        correctAmount,
+        txAmount: typeof txn.amount === 'bigint' ? txn.amount.toString() : txn.amount
       });
       return res.status(400).json({ error: "On-chain transaction verification failed. Details mismatch." });
     }
@@ -188,117 +187,6 @@ app.post("/api/orders/:id/confirm", (req, res) => {
     res.json({ status: "success" });
   } catch (error) {
     res.status(500).json({ error: "Failed to confirm order" });
-  }
-});
-
-// Savings Goals API
-app.get("/api/savings/goals/:address", (req, res) => {
-  const goals = db.prepare("SELECT * FROM savings_goals WHERE user_address = ? ORDER BY created_at DESC").all(req.params.address);
-  res.json(goals);
-});
-
-app.post("/api/savings/goals", (req, res) => {
-  const { user_address, name, target_amount, deadline } = req.body;
-  const id = randomUUID();
-  try {
-    db.prepare("INSERT INTO savings_goals (id, user_address, name, target_amount, deadline) VALUES (?, ?, ?, ?, ?)")
-      .run(id, user_address, name, target_amount, deadline);
-    res.json({ id, status: "success" });
-  } catch (error) {
-    res.status(500).json({ error: "Failed to create savings goal" });
-  }
-});
-
-app.get("/api/savings/deposits/:goalId", (req, res) => {
-  const deposits = db.prepare("SELECT * FROM savings_deposits WHERE goal_id = ? ORDER BY created_at ASC").all(req.params.goalId);
-  res.json(deposits);
-});
-
-app.post("/api/savings/deposits", async (req, res) => {
-  const { goal_id, user_address, amount, tx_id } = req.body;
-  const id = randomUUID();
-  
-  try {
-    // 1. Verify Transaction on Algorand Network
-    console.log(`Verifying savings deposit ${tx_id} on-chain...`);
-    const txInfo = await algodClient.pendingTransactionInformation(tx_id).do();
-    
-    // Try to find the transaction object in various possible locations in the response
-    const info = txInfo as any;
-    const signedTxn = info.txn || info.transaction;
-    const txn = (signedTxn ? (signedTxn.txn || signedTxn) : info) as any;
-    
-    // Algorand transactions can have different field names depending on whether they are raw or SDK-wrapped
-    const type = txn.type || txn.ty;
-    const isPayment = type === "pay" || (type instanceof Uint8Array && new TextDecoder().decode(type) === "pay");
-    
-    const getAddr = (val: any) => {
-      if (!val) return "";
-      if (typeof val === "string") return val;
-      try {
-        let pk = val.publicKey || val;
-        if (pk && typeof pk === 'object' && !(pk instanceof Uint8Array) && Object.keys(pk).length === 32) {
-          pk = new Uint8Array(Object.values(pk));
-        }
-        return algosdk.encodeAddress(pk);
-      } catch (e) {
-        return "";
-      }
-    };
-
-    const sender = getAddr(txn.sender || txn.snd || txn.from);
-    const receiver = getAddr(txn.receiver || txn.rcv || txn.to);
-    const txAmount = txn.amount || txn.amt || 0;
-
-    const correctSender = sender === user_address;
-    const correctReceiver = receiver === SAVINGS_VAULT_ADDRESS;
-    const expectedMicroAlgos = Math.round(Number(amount) * 1_000_000);
-    const correctAmount = Math.abs(Number(txAmount) - expectedMicroAlgos) < 10; // Allow small rounding diff
-
-    console.log("Savings Verification Details:", {
-      isPayment,
-      sender,
-      receiver,
-      txAmount: txAmount.toString(),
-      correctSender,
-      correctReceiver,
-      correctAmount,
-      expectedSender: user_address,
-      expectedReceiver: SAVINGS_VAULT_ADDRESS,
-      expectedAmount: expectedMicroAlgos
-    });
-
-    if (!isPayment || !correctSender || !correctReceiver || !correctAmount) {
-      console.error("Savings verification failed:", { 
-        isPayment, 
-        sender, 
-        receiver, 
-        txAmount: typeof txAmount === 'bigint' ? txAmount.toString() : txAmount,
-        expectedSender: user_address,
-        expectedAmount: expectedMicroAlgos,
-        type
-      });
-      return res.status(400).json({ error: "On-chain transaction verification failed." });
-    }
-
-    // 2. Commit to Database
-    const transaction = db.transaction(() => {
-      db.prepare("INSERT INTO savings_deposits (id, goal_id, user_address, amount, tx_id) VALUES (?, ?, ?, ?, ?)")
-        .run(id, goal_id, user_address, amount, tx_id);
-      db.prepare("UPDATE savings_goals SET current_amount = current_amount + ? WHERE id = ?").run(amount, goal_id);
-      
-      // Check if goal reached
-      const goal = db.prepare("SELECT * FROM savings_goals WHERE id = ?").get(goal_id) as any;
-      if (goal.current_amount >= goal.target_amount) {
-        db.prepare("UPDATE savings_goals SET status = 'completed' WHERE id = ?").run(goal_id);
-      }
-    });
-    transaction();
-    
-    res.json({ id, status: "success" });
-  } catch (error: any) {
-    console.error("Failed to process deposit:", error);
-    res.status(500).json({ error: error.message || "Failed to process deposit" });
   }
 });
 
@@ -378,44 +266,20 @@ app.post("/api/tasks/:id/approve", async (req, res) => {
     const getAddr = (val: any) => {
       if (!val) return "";
       if (typeof val === "string") return val;
-      try {
-        let pk = val.publicKey || val;
-        if (pk && typeof pk === 'object' && !(pk instanceof Uint8Array) && Object.keys(pk).length === 32) {
-          pk = new Uint8Array(Object.values(pk));
-        }
-        return algosdk.encodeAddress(pk);
-      } catch (e) {
-        return "";
-      }
+      try { return algosdk.encodeAddress(val.publicKey || val); } catch (e) { return ""; }
     };
 
-    const sender = getAddr(txn.sender || txn.snd || txn.from);
-    const receiver = getAddr(txn.receiver || txn.rcv || txn.to);
-    const txAmount = txn.amount || txn.amount || txn.amt || 0;
+    const sender = getAddr(txn.snd || txn.from);
+    const receiver = getAddr(txn.rcv || txn.to);
+    const txAmount = txn.amt || txn.amount || 0;
 
     const correctSender = sender === creator_address;
     const correctReceiver = receiver === task.worker_address;
     const expectedMicroAlgos = Math.round(Number(task.reward) * 1_000_000);
     const correctAmount = Math.abs(Number(txAmount) - expectedMicroAlgos) < 10;
 
-    console.log("Verification Details:", {
-      isPayment,
-      sender,
-      receiver,
-      txAmount: txAmount.toString(),
-      correctSender,
-      correctReceiver,
-      correctAmount,
-      expectedSender: creator_address,
-      expectedReceiver: task.worker_address,
-      expectedAmount: expectedMicroAlgos
-    });
-
     if (!isPayment || !correctSender || !correctReceiver || !correctAmount) {
-      return res.status(400).json({ 
-        error: "Payment transaction verification failed.",
-        details: { isPayment, correctSender, correctReceiver, correctAmount }
-      });
+      return res.status(400).json({ error: "Payment transaction verification failed." });
     }
 
     db.prepare("UPDATE tasks SET status = 'completed', tx_id = ? WHERE id = ?").run(tx_id, id);
@@ -429,6 +293,95 @@ app.post("/api/tasks/:id/approve", async (req, res) => {
 app.get("/api/my-tasks/:address", (req, res) => {
   const tasks = db.prepare("SELECT * FROM tasks WHERE creator_address = ? OR worker_address = ? ORDER BY created_at DESC").all(req.params.address, req.params.address);
   res.json(tasks);
+});
+
+// Split Expenses API
+app.get("/api/groups/:address", (req, res) => {
+  const { address } = req.params;
+  try {
+    const groups = db.prepare(`
+      SELECT g.* FROM expense_groups g
+      JOIN group_participants p ON g.id = p.group_id
+      WHERE p.address = ?
+      ORDER BY g.created_at DESC
+    `).all(address);
+    res.json(groups);
+  } catch (error) {
+    res.status(500).json({ error: "Failed to fetch groups" });
+  }
+});
+
+app.post("/api/groups", (req, res) => {
+  const { name, participants } = req.body;
+  try {
+    const createGroup = db.transaction(() => {
+      const result = db.prepare("INSERT INTO expense_groups (name) VALUES (?)").run(name);
+      const groupId = result.lastInsertRowid;
+      const insertParticipant = db.prepare("INSERT INTO group_participants (group_id, address) VALUES (?, ?)");
+      for (const address of participants) {
+        insertParticipant.run(groupId, address);
+      }
+      return { id: groupId, name, created_at: new Date().toISOString() };
+    });
+    const newGroup = createGroup();
+    res.json(newGroup);
+  } catch (error) {
+    console.error("Failed to create group:", error);
+    res.status(500).json({ error: "Failed to create group" });
+  }
+});
+
+app.get("/api/groups/:id/details", (req, res) => {
+  const { id } = req.params;
+  try {
+    const group = db.prepare("SELECT * FROM expense_groups WHERE id = ?").get(id);
+    if (!group) return res.status(404).json({ error: "Group not found" });
+    
+    const participants = db.prepare("SELECT address FROM group_participants WHERE group_id = ?").all(id);
+    const expenses = db.prepare("SELECT * FROM expenses WHERE group_id = ? ORDER BY created_at DESC").all(id);
+    const settlements = db.prepare("SELECT * FROM settlements WHERE group_id = ? ORDER BY created_at DESC").all(id);
+    
+    for (const expense of expenses as any[]) {
+      expense.splits = db.prepare("SELECT address, share FROM expense_splits WHERE expense_id = ?").all(expense.id);
+    }
+    
+    res.json({ group, participants, expenses, settlements });
+  } catch (error) {
+    console.error("Failed to fetch group details:", error);
+    res.status(500).json({ error: "Failed to fetch group details" });
+  }
+});
+
+app.post("/api/expenses", (req, res) => {
+  const { groupId, description, amount, payerAddress, splits } = req.body;
+  try {
+    const addExpense = db.transaction(() => {
+      const result = db.prepare("INSERT INTO expenses (group_id, description, amount, payer_address) VALUES (?, ?, ?, ?)")
+        .run(groupId, description, amount, payerAddress);
+      const expenseId = result.lastInsertRowid;
+      const insertSplit = db.prepare("INSERT INTO expense_splits (expense_id, address, share) VALUES (?, ?, ?)");
+      for (const split of splits) {
+        insertSplit.run(expenseId, split.address, split.share);
+      }
+    });
+    addExpense();
+    res.json({ status: "success" });
+  } catch (error) {
+    console.error("Failed to add expense:", error);
+    res.status(500).json({ error: "Failed to add expense" });
+  }
+});
+
+app.post("/api/settlements", (req, res) => {
+  const { groupId, fromAddress, toAddress, amount, txId } = req.body;
+  try {
+    db.prepare("INSERT INTO settlements (group_id, from_address, to_address, amount, tx_id) VALUES (?, ?, ?, ?, ?)")
+      .run(groupId, fromAddress, toAddress, amount, txId);
+    res.json({ status: "success" });
+  } catch (error) {
+    console.error("Failed to record settlement:", error);
+    res.status(500).json({ error: "Failed to record settlement" });
+  }
 });
 
 app.get("/api/history/:address", async (req, res) => {

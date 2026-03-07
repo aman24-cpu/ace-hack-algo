@@ -27,13 +27,13 @@ import {
   ChevronRight,
   Store,
   ShoppingBag,
-  Target,
   TrendingUp,
-  Briefcase
+  Briefcase,
+  Users
 } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
 import Marketplace from "./components/Marketplace";
-import SavingsGoals from "./components/SavingsGoals";
+import SplitExpenses from "./components/SplitExpenses";
 import { CampusGigs } from "./components/CampusGigs";
 import { 
   algodClient, 
@@ -55,7 +55,7 @@ export default function App() {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [copied, setCopied] = useState(false);
-  const [activeTab, setActiveTab] = useState<"dashboard" | "marketplace" | "savings" | "gigs" | "send" | "receive" | "history" | "directory">("dashboard");
+  const [activeTab, setActiveTab] = useState<"dashboard" | "marketplace" | "gigs" | "split" | "send" | "receive" | "history" | "directory">("dashboard");
 
   // Send Form State
   const [recipient, setRecipient] = useState("");
@@ -203,7 +203,7 @@ export default function App() {
           <NavItem id="dashboard" icon={CreditCard} label="Dashboard" />
           <NavItem id="marketplace" icon={ShoppingBag} label="Marketplace" />
           <NavItem id="gigs" icon={Briefcase} label="Campus Gigs" />
-          <NavItem id="savings" icon={Target} label="Savings Goals" />
+          <NavItem id="split" icon={Users} label="Split Expenses" />
           <NavItem id="send" icon={Send} label="Send ALGO" />
           <NavItem id="receive" icon={QrCode} label="Receive" />
           <NavItem id="history" icon={History} label="History" />
@@ -404,14 +404,14 @@ export default function App() {
                             <ChevronRight className="w-4 h-4 text-zinc-300 group-hover:text-zinc-900 transition-colors" />
                           </button>
                           <button 
-                            onClick={() => setActiveTab("savings")}
+                            onClick={() => setActiveTab("split")}
                             className="w-full flex items-center justify-between p-4 rounded-2xl hover:bg-zinc-50 transition-all group"
                           >
                             <div className="flex items-center gap-3">
-                              <div className="w-10 h-10 bg-emerald-50 text-emerald-500 rounded-xl flex items-center justify-center">
-                                <Target className="w-5 h-5" />
+                              <div className="w-10 h-10 bg-indigo-50 text-indigo-500 rounded-xl flex items-center justify-center">
+                                <Users className="w-5 h-5" />
                               </div>
-                              <span className="text-sm font-bold text-zinc-700">Savings Goals</span>
+                              <span className="text-sm font-bold text-zinc-700">Split Expenses</span>
                             </div>
                             <ChevronRight className="w-4 h-4 text-zinc-300 group-hover:text-zinc-900 transition-colors" />
                           </button>
@@ -477,16 +477,15 @@ export default function App() {
                   </motion.div>
                 )}
 
-                {activeTab === "savings" && (
+                {activeTab === "split" && (
                   <motion.div
-                    key="savings"
+                    key="split"
                     initial={{ opacity: 0, y: 10 }}
                     animate={{ opacity: 1, y: 0 }}
                     exit={{ opacity: 0, y: -10 }}
                   >
-                    <SavingsGoals 
+                    <SplitExpenses 
                       accountAddress={accountAddress} 
-                      onRefreshBalance={handleRefresh}
                     />
                   </motion.div>
                 )}
@@ -734,8 +733,8 @@ export default function App() {
         <button onClick={() => setActiveTab("gigs")} className={cn("p-3 rounded-xl transition-all", activeTab === "gigs" ? "bg-zinc-900 text-white" : "text-zinc-400")}>
           <Briefcase className="w-6 h-6" />
         </button>
-        <button onClick={() => setActiveTab("savings")} className={cn("p-3 rounded-xl transition-all", activeTab === "savings" ? "bg-zinc-900 text-white" : "text-zinc-400")}>
-          <Target className="w-6 h-6" />
+        <button onClick={() => setActiveTab("split")} className={cn("p-3 rounded-xl transition-all", activeTab === "split" ? "bg-zinc-900 text-white" : "text-zinc-400")}>
+          <Users className="w-6 h-6" />
         </button>
         <button onClick={() => setActiveTab("send")} className={cn("p-3 rounded-xl transition-all", activeTab === "send" ? "bg-zinc-900 text-white" : "text-zinc-400")}>
           <Send className="w-6 h-6" />

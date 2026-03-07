@@ -11,7 +11,8 @@ import {
   AlertCircle,
   CreditCard,
   ArrowDownLeft,
-  ArrowUpRight
+  ArrowUpRight,
+  RefreshCw
 } from "lucide-react";
 import { cn } from "../lib/utils";
 import { peraWallet, algodClient, formatAlgo } from "../services/algorandService";
@@ -41,6 +42,15 @@ interface Expense {
   splits: Split[];
 }
 
+interface Settlement {
+  id: number;
+  from_address: string;
+  to_address: string;
+  amount: number;
+  tx_id: string;
+  created_at: string;
+}
+
 interface SplitExpensesProps {
   accountAddress: string;
 }
@@ -48,9 +58,10 @@ interface SplitExpensesProps {
 export default function SplitExpenses({ accountAddress }: SplitExpensesProps) {
   const [groups, setGroups] = useState<Group[]>([]);
   const [selectedGroupId, setSelectedGroupId] = useState<number | null>(null);
-  const [groupDetails, setGroupDetails] = useState<{ group: Group; participants: Participant[]; expenses: Expense[] } | null>(null);
+  const [groupDetails, setGroupDetails] = useState<{ group: Group; participants: Participant[]; expenses: Expense[]; settlements: Settlement[] } | null>(null);
   const [isCreatingGroup, setIsCreatingGroup] = useState(false);
   const [isAddingExpense, setIsAddingExpense] = useState(false);
+  const [isRecordingManual, setIsRecordingManual] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
 
   // Create Group Form State
@@ -62,6 +73,11 @@ export default function SplitExpenses({ accountAddress }: SplitExpensesProps) {
   const [expenseDesc, setExpenseDesc] = useState("");
   const [expenseAmount, setExpenseAmount] = useState("");
   const [expenseParticipants, setExpenseParticipants] = useState<string[]>([]);
+
+  // Manual Settlement Form State
+  const [manualFrom, setManualFrom] = useState("");
+  const [manualTo, setManualTo] = useState("");
+  const [manualAmount, setManualAmount] = useState("");
 
   const fetchGroups = useCallback(async () => {
     try {
@@ -167,6 +183,14 @@ export default function SplitExpenses({ accountAddress }: SplitExpensesProps) {
       });
     });
 
+    // Add settlements to balance
+    groupDetails.settlements.forEach(settle => {
+      // Sender paid, so their balance increases (they owe less or are owed more)
+      balances[settle.from_address] += settle.amount;
+      // Receiver got paid, so their balance decreases (they are owed less or owe more)
+      balances[settle.to_address] -= settle.amount;
+    });
+
     return Object.entries(balances).map(([address, balance]) => ({ address, balance }));
   };
 
@@ -190,11 +214,49 @@ export default function SplitExpenses({ accountAddress }: SplitExpensesProps) {
       const txId = (response as any).txId || (response as any).txid;
       
       await algosdk.waitForConfirmation(algodClient, txId, 4);
+      
+      // Record settlement in backend
+      await fetch("/api/settlements", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          groupId: selectedGroupId,
+          fromAddress: accountAddress,
+          toAddress: to,
+          amount: amount,
+          txId: txId
+        }),
+      });
+
       alert(`Settlement successful! ID: ${txId}`);
-      // In a real app, we'd mark the debt as settled in the DB
+      fetchGroupDetails(selectedGroupId!);
     } catch (err) {
       console.error("Settlement failed", err);
       alert("Settlement failed. See console for details.");
+    }
+  };
+
+  const handleManualSettle = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedGroupId || !manualFrom || !manualTo || !manualAmount) return;
+
+    try {
+      await fetch("/api/settlements", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          groupId: selectedGroupId,
+          fromAddress: manualFrom,
+          toAddress: manualTo,
+          amount: parseFloat(manualAmount),
+          txId: "MANUAL-" + Math.random().toString(36).slice(2, 9).toUpperCase()
+        }),
+      });
+      fetchGroupDetails(selectedGroupId);
+      setIsRecordingManual(false);
+      setManualAmount("");
+    } catch (err) {
+      console.error("Manual settlement failed", err);
     }
   };
 
@@ -310,14 +372,22 @@ export default function SplitExpenses({ accountAddress }: SplitExpensesProps) {
         </div>
       ) : (
         <div className="space-y-6">
-          <div className="flex items-center gap-3">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <button 
+                onClick={() => setSelectedGroupId(null)}
+                className="p-2 rounded-xl bg-zinc-100 hover:bg-zinc-200 text-zinc-600 transition-colors"
+              >
+                <Trash2 className="w-4 h-4 rotate-45" />
+              </button>
+              <h2 className="text-xl font-semibold text-zinc-900">{groupDetails?.group.name}</h2>
+            </div>
             <button 
-              onClick={() => setSelectedGroupId(null)}
-              className="p-2 rounded-xl bg-zinc-100 hover:bg-zinc-200 text-zinc-600 transition-colors"
+              onClick={() => fetchGroupDetails(selectedGroupId!)}
+              className={cn("p-2 rounded-xl bg-zinc-100 hover:bg-zinc-200 text-zinc-600 transition-colors", isLoading && "animate-spin")}
             >
-              <Trash2 className="w-4 h-4 rotate-45" />
+              <RefreshCw className="w-4 h-4" />
             </button>
-            <h2 className="text-xl font-semibold text-zinc-900">{groupDetails?.group.name}</h2>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -359,10 +429,37 @@ export default function SplitExpenses({ accountAddress }: SplitExpensesProps) {
                           Settle Now
                         </button>
                       )}
+                      {balance > 0 && address === accountAddress && (
+                        <button 
+                          onClick={() => {
+                            const owesMe = balances.find(b => b.balance < 0);
+                            if (owesMe) {
+                              setManualFrom(owesMe.address);
+                              setManualTo(accountAddress);
+                              setManualAmount(Math.abs(owesMe.balance).toString());
+                              setIsRecordingManual(true);
+                            }
+                          }}
+                          className="text-[10px] font-bold text-emerald-600 underline underline-offset-2 hover:text-emerald-700"
+                        >
+                          Mark as Paid
+                        </button>
+                      )}
                     </div>
                   </div>
                 ))}
               </div>
+              <button 
+                onClick={() => {
+                  setManualFrom("");
+                  setManualTo("");
+                  setManualAmount("");
+                  setIsRecordingManual(true);
+                }}
+                className="w-full py-3 rounded-2xl border border-dashed border-zinc-200 text-zinc-500 text-xs font-medium hover:bg-zinc-50 transition-colors"
+              >
+                Record Manual Payment
+              </button>
             </div>
 
             {/* Expenses Section */}
@@ -458,6 +555,97 @@ export default function SplitExpenses({ accountAddress }: SplitExpensesProps) {
                     </div>
                   ))
                 )}
+              </div>
+
+              {isRecordingManual && (
+                <div className="bg-zinc-100 p-6 rounded-3xl space-y-4 border border-zinc-200">
+                  <div className="flex items-center justify-between">
+                    <h4 className="font-medium text-zinc-900">Record Payment</h4>
+                    <button onClick={() => setIsRecordingManual(false)} className="text-zinc-400 hover:text-zinc-600">
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
+                  <form onSubmit={handleManualSettle} className="space-y-4">
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <label className="text-[10px] font-bold text-zinc-400 uppercase">From</label>
+                        <select 
+                          value={manualFrom}
+                          onChange={(e) => setManualFrom(e.target.value)}
+                          className="w-full bg-white border border-zinc-200 rounded-xl px-3 py-2 text-xs"
+                        >
+                          <option value="">Select Payer</option>
+                          {groupDetails?.participants.map(p => (
+                            <option key={p.address} value={p.address}>
+                              {p.address === accountAddress ? "You" : p.address.slice(0, 8) + "..."}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-bold text-zinc-400 uppercase">To</label>
+                        <select 
+                          value={manualTo}
+                          onChange={(e) => setManualTo(e.target.value)}
+                          className="w-full bg-white border border-zinc-200 rounded-xl px-3 py-2 text-xs"
+                        >
+                          <option value="">Select Receiver</option>
+                          {groupDetails?.participants.map(p => (
+                            <option key={p.address} value={p.address}>
+                              {p.address === accountAddress ? "You" : p.address.slice(0, 8) + "..."}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+                    <input 
+                      type="number" 
+                      value={manualAmount}
+                      onChange={(e) => setManualAmount(e.target.value)}
+                      placeholder="Amount in ALGO"
+                      className="w-full bg-white border border-zinc-200 rounded-xl px-4 py-2.5 text-sm"
+                    />
+                    <button 
+                      type="submit"
+                      className="w-full py-3 rounded-xl bg-zinc-900 text-white font-bold hover:bg-zinc-800 transition-all"
+                    >
+                      Record Payment
+                    </button>
+                  </form>
+                </div>
+              )}
+
+              {/* Settlements List */}
+              <div className="pt-6 space-y-4">
+                <h3 className="text-sm font-medium text-zinc-500 uppercase tracking-wider">Recent Settlements</h3>
+                <div className="space-y-3">
+                  {groupDetails?.settlements.length === 0 ? (
+                    <div className="text-center py-8 bg-zinc-50 rounded-2xl border border-dashed border-zinc-200">
+                      <CheckCircle2 className="w-8 h-8 text-zinc-300 mx-auto mb-2" />
+                      <p className="text-xs text-zinc-400">No settlements yet.</p>
+                    </div>
+                  ) : (
+                    groupDetails?.settlements.map((settle) => (
+                      <div key={settle.id} className="p-4 rounded-2xl bg-emerald-50 border border-emerald-100 flex items-center justify-between">
+                        <div className="flex items-center gap-3">
+                          <div className="w-8 h-8 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center">
+                            <CreditCard className="w-4 h-4" />
+                          </div>
+                          <div>
+                            <p className="text-xs font-bold text-zinc-900">
+                              {settle.from_address === accountAddress ? "You" : settle.from_address.slice(0, 6) + "..."} paid {settle.to_address === accountAddress ? "You" : settle.to_address.slice(0, 6) + "..."}
+                            </p>
+                            <p className="text-[10px] text-zinc-500 font-mono">{settle.tx_id.slice(0, 12)}...</p>
+                          </div>
+                        </div>
+                        <div className="text-right">
+                          <p className="font-bold text-emerald-600">{settle.amount.toFixed(2)} ALGO</p>
+                          <p className="text-[10px] text-zinc-400">{new Date(settle.created_at).toLocaleDateString()}</p>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
               </div>
             </div>
           </div>
