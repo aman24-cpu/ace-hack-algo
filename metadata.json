@@ -1,0 +1,5 @@
+{
+  "name": "CampusPay: Algorand Student Wallet",
+  "description": "A simple web-based wallet for students to send and receive ALGO and stablecoins within their campus community.",
+  "requestFramePermissions": []
+}
