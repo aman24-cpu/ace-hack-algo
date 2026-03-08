@@ -1,0 +1,143 @@
+#pragma version 8
+
+// Gig Escrow TEAL
+// 0: Open, 1: Claimed, 2: Completed
+
+// On App Creation (NoArgs)
+int 0
+txn ApplicationID
+==
+bz not_creation
+
+// Store Creator
+byte "creator"
+txn Sender
+app_global_put
+
+// Store Status = 0 (Open)
+byte "status"
+int 0
+app_global_put
+
+// Return success
+int 1
+return
+
+not_creation:
+// Handle methods
+txna ApplicationArgs 0
+byte "fund"
+==
+bnz handle_fund
+
+txna ApplicationArgs 0
+byte "claim"
+==
+bnz handle_claim
+
+txna ApplicationArgs 0
+byte "approve"
+==
+bnz handle_approve
+
+err
+
+handle_fund:
+// Ensure the attached payment is to us and from the creator
+global GroupSize
+int 2
+==
+assert
+
+// Check it's an app call + payment
+gtxn 0 TypeEnum
+int appl
+==
+assert
+
+gtxn 1 TypeEnum
+int pay
+==
+assert
+
+// Ensure the caller is the creator
+byte "creator"
+app_global_get
+gtxn 0 Sender
+==
+assert
+
+// Ensure the receiver is this application
+gtxn 1 Receiver
+global CurrentApplicationAddress
+==
+assert
+
+// Store the reward amount
+byte "reward"
+gtxn 1 Amount
+app_global_put
+
+int 1
+return
+
+handle_claim:
+// Assert status is 0
+byte "status"
+app_global_get
+int 0
+==
+assert
+
+// The sender must be passed or it's the sender
+byte "worker"
+txn Sender
+app_global_put
+
+// Set status to 1
+byte "status"
+int 1
+app_global_put
+
+int 1
+return
+
+handle_approve:
+// Assert status is 1
+byte "status"
+app_global_get
+int 1
+==
+assert
+
+// Assert sender is creator
+byte "creator"
+app_global_get
+txn Sender
+==
+assert
+
+// Send the reward to the worker
+itxn_begin
+int pay
+itxn_field TypeEnum
+
+byte "worker"
+app_global_get
+itxn_field Receiver
+
+byte "reward"
+app_global_get
+itxn_field Amount
+
+int 0
+itxn_field Fee
+itxn_submit
+
+// Set status to 2
+byte "status"
+int 2
+app_global_put
+
+int 1
+return

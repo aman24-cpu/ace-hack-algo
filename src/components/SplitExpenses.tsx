@@ -73,6 +73,8 @@ export default function SplitExpenses({ accountAddress }: SplitExpensesProps) {
   const [expenseDesc, setExpenseDesc] = useState("");
   const [expenseAmount, setExpenseAmount] = useState("");
   const [expenseParticipants, setExpenseParticipants] = useState<string[]>([]);
+  const [splitType, setSplitType] = useState<"equal" | "percentage" | "amount">("equal");
+  const [weightedDist, setWeightedDist] = useState<Record<string, string>>({});
 
   // Manual Settlement Form State
   const [manualFrom, setManualFrom] = useState("");
@@ -144,8 +146,29 @@ export default function SplitExpenses({ accountAddress }: SplitExpensesProps) {
     if (!selectedGroupId || !expenseDesc || !expenseAmount || expenseParticipants.length === 0) return;
 
     const amount = parseFloat(expenseAmount);
-    const share = amount / expenseParticipants.length;
-    const splits = expenseParticipants.map(addr => ({ address: addr, share }));
+    let splits: Split[];
+    
+    if (splitType === "equal") {
+      const share = amount / expenseParticipants.length;
+      splits = expenseParticipants.map(addr => ({ address: addr, share }));
+    } else if (splitType === "percentage") {
+      splits = expenseParticipants.map(addr => {
+        const percentage = parseFloat(weightedDist[addr] || "0");
+        return { address: addr, share: (amount * percentage) / 100 };
+      });
+    } else {
+      // Fixed amount split
+      splits = expenseParticipants.map(addr => ({ 
+        address: addr, 
+        share: parseFloat(weightedDist[addr] || "0") 
+      }));
+      
+      const totalSplit = splits.reduce((sum, s) => sum + s.share, 0);
+      if (Math.abs(totalSplit - amount) > 0.01) {
+        alert("Total split amounts must equal total expense amount");
+        return;
+      }
+    }
 
     try {
       await fetch("/api/expenses", {
@@ -523,6 +546,48 @@ export default function SplitExpenses({ accountAddress }: SplitExpensesProps) {
                         ))}
                       </div>
                     </div>
+
+                    <div className="space-y-2">
+                       <label className="text-[10px] uppercase font-bold text-zinc-400">Split Type</label>
+                       <div className="flex gap-2">
+                         <button 
+                            type="button"
+                            onClick={() => setSplitType("equal")}
+                            className={cn("px-3 py-1 rounded-lg text-[10px] font-bold", splitType === 'equal' ? 'bg-white text-zinc-900' : 'bg-white/5 text-zinc-400')}
+                         >Equal</button>
+                         <button 
+                            type="button"
+                            onClick={() => setSplitType("percentage")}
+                            className={cn("px-3 py-1 rounded-lg text-[10px] font-bold", splitType === 'percentage' ? 'bg-white text-zinc-900' : 'bg-white/5 text-zinc-400')}
+                         >Percentage (%)</button>
+                         <button 
+                            type="button"
+                            onClick={() => setSplitType("amount")}
+                            className={cn("px-3 py-1 rounded-lg text-[10px] font-bold", splitType === 'amount' ? 'bg-white text-zinc-900' : 'bg-white/5 text-zinc-400')}
+                         >Amount (ALGO)</button>
+                       </div>
+                    </div>
+
+                    {splitType !== 'equal' && (
+                        <div className="space-y-2">
+                            {expenseParticipants.map(addr => (
+                                <div key={addr} className="flex items-center justify-between gap-4">
+                                    <span className="text-[10px] font-mono text-zinc-400">{addr === accountAddress ? "You" : addr.slice(0,6)}</span>
+                                    <div className="flex items-center gap-2">
+                                        <input 
+                                            type="number" 
+                                            placeholder="0"
+                                            value={weightedDist[addr] || ""}
+                                            onChange={(e) => setWeightedDist({...weightedDist, [addr]: e.target.value})}
+                                            className="w-16 bg-white/5 border border-white/10 rounded-lg px-2 py-1 text-[10px] text-white"
+                                        />
+                                        <span className="text-[10px] text-zinc-500">{splitType === 'percentage' ? '%' : 'ALGO'}</span>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+
                     <button 
                       type="submit"
                       className="w-full py-3 rounded-xl bg-white text-zinc-900 font-bold hover:bg-zinc-100 transition-all"

@@ -13,7 +13,8 @@ import {
   FileText,
   Send,
   Loader2,
-  X
+  X,
+  Star
 } from "lucide-react";
 import { 
   GigTask, 
@@ -22,12 +23,15 @@ import {
   claimTask, 
   submitProof, 
   approveTask, 
+  payoutMilestone,
+  rateWorkerOnChain,
   getMyTasks,
   peraWallet,
   algodClient,
   formatAlgo
 } from "../services/algorandService";
 import algosdk from "algosdk";
+import { cn } from "../lib/utils";
 
 interface CampusGigsProps {
   accountAddress: string;
@@ -47,11 +51,62 @@ export const CampusGigs: React.FC<CampusGigsProps> = ({ accountAddress }) => {
   const [newReward, setNewReward] = useState("");
   const [newDeadline, setNewDeadline] = useState("");
   const [postStatus, setPostStatus] = useState("");
+  const [newMilestones, setNewMilestones] = useState<{title: string, percentage: number}[]>([]);
 
   // Action State
   const [processingId, setProcessingId] = useState<string | null>(null);
   const [proofUrl, setProofUrl] = useState("");
   const [showProofModal, setShowProofModal] = useState<string | null>(null);
+
+  const handleRateWorker = async (task: GigTask, rating: number) => {
+    try {
+      setProcessingId(task.id);
+      console.log(`Rating worker on-chain...`);
+      await rateWorkerOnChain(task, accountAddress, rating);
+      
+      const response = await fetch(`/api/tasks/${task.id}/rate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ rating, creator_address: accountAddress }),
+      });
+      if (!response.ok) throw new Error("Failed to submit rating to database");
+      alert("Rating submitted on-chain!");
+      fetchData();
+    } catch (error: any) {
+      alert(error.message);
+    } finally {
+      setProcessingId(null);
+    }
+  };
+
+  const StarRating: React.FC<{ rating: number; onRate?: (r: number) => void; size?: number }> = ({ rating, onRate, size = 4 }) => {
+    const [hover, setHover] = useState(0);
+    return (
+      <div className="flex items-center gap-1">
+        {[1, 2, 3, 4, 5].map((star) => (
+          <button
+            key={star}
+            type="button"
+            disabled={!onRate}
+            onMouseEnter={() => onRate && setHover(star)}
+            onMouseLeave={() => onRate && setHover(0)}
+            onClick={() => onRate && onRate(star)}
+            className={cn(
+              "transition-all duration-200",
+              onRate ? "cursor-pointer hover:scale-110 active:scale-95" : "cursor-default"
+            )}
+          >
+            <Star 
+              className={cn(
+                `w-${size} h-${size}`,
+                (hover || rating) >= star ? "text-amber-400 fill-current" : "text-zinc-200"
+              )} 
+            />
+          </button>
+        ))}
+      </div>
+    );
+  };
 
   const fetchData = async () => {
     setIsLoading(true);
@@ -85,7 +140,8 @@ export const CampusGigs: React.FC<CampusGigsProps> = ({ accountAddress }) => {
         description: newDesc,
         reward: parseFloat(newReward),
         deadline: newDeadline,
-        creator_address: accountAddress
+        creator_address: accountAddress,
+        milestones: newMilestones.length > 0 ? newMilestones.map(m => ({ ...m, completed: false })) : undefined
       });
 
       setPostStatus("Gig posted successfully!");
@@ -96,6 +152,7 @@ export const CampusGigs: React.FC<CampusGigsProps> = ({ accountAddress }) => {
         setNewDesc("");
         setNewReward("");
         setNewDeadline("");
+        setNewMilestones([]);
         fetchData();
       }, 2000);
     } catch (error: any) {
@@ -104,10 +161,10 @@ export const CampusGigs: React.FC<CampusGigsProps> = ({ accountAddress }) => {
     }
   };
 
-  const handleClaim = async (taskId: string) => {
-    setProcessingId(taskId);
+  const handleClaim = async (task: GigTask) => {
+    setProcessingId(task.id);
     try {
-      await claimTask(taskId, accountAddress);
+      await claimTask(task, accountAddress);
       fetchData();
     } catch (error: any) {
       alert(error.message);
@@ -131,38 +188,46 @@ export const CampusGigs: React.FC<CampusGigsProps> = ({ accountAddress }) => {
     }
   };
 
-  const handleApprove = async (taskId: string, workerAddress: string, reward: number) => {
-    setProcessingId(taskId);
+  const handleApprove = async (task: GigTask) => {
+    setProcessingId(task.id);
     try {
-      // 1. Direct Payment to Worker
-      console.log(`Processing payment of ${reward} ALGO to ${workerAddress}`);
-      const suggestedParams = await algodClient.getTransactionParams().do();
-      const amountInMicroAlgos = Math.round(reward * 1_000_000);
-      
-      const txn = algosdk.makePaymentTxnWithSuggestedParamsFromObject({
-        sender: accountAddress,
-        receiver: workerAddress.trim(),
-        amount: BigInt(amountInMicroAlgos),
-        suggestedParams: suggestedParams,
-      });
-
-      const txnGroup = [{ txn, signers: [accountAddress] }];
-      const signedTxns = await peraWallet.signTransaction([txnGroup]);
-      
-      const response = await algodClient.sendRawTransaction(signedTxns).do();
-      const txId = (response as any).txId || (response as any).txid;
-
-      await algosdk.waitForConfirmation(algodClient, txId, 4);
-
-      // 2. Update Backend
-      console.log("Updating backend for task approval...");
-      await approveTask(taskId, accountAddress, txId);
-      console.log("Backend updated, fetching fresh data...");
+      console.log(`Approving task and triggering escrow payment...`);
+      await approveTask(task, accountAddress);
+      console.log("Escrow contract executed, checking status...");
       await fetchData();
       console.log("Data refreshed.");
     } catch (error: any) {
       console.error("Approval/Payment failed:", error.message || error);
       alert(error.message || "An unexpected error occurred");
+    } finally {
+      setProcessingId(null);
+    }
+  };
+
+  const handleApproveMilestone = async (task: GigTask, index: number) => {
+    setProcessingId(task.id);
+    try {
+      const milestone = task.milestones![index];
+      const amountAlgo = Number(task.reward) * (milestone.percentage / 100);
+      
+      console.log(`Releasing ${milestone.percentage}% payout (${amountAlgo} ALGO) on-chain...`);
+      const txId = await payoutMilestone(task, accountAddress, amountAlgo);
+      
+      const response = await fetch(`/api/tasks/${task.id}/approve`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ 
+          creator_address: accountAddress, 
+          tx_id: txId, 
+          milestone_index: index 
+        }),
+      });
+      if (!response.ok) throw new Error("Failed to update milestone status in backend");
+      
+      alert(`Milestone "${milestone.title}" approved and paid on-chain!`);
+      fetchData();
+    } catch (error: any) {
+      alert(error.message);
     } finally {
       setProcessingId(null);
     }
@@ -274,7 +339,7 @@ export const CampusGigs: React.FC<CampusGigsProps> = ({ accountAddress }) => {
                   </div>
 
                   <button
-                    onClick={() => handleClaim(task.id)}
+                    onClick={() => handleClaim(task)}
                     disabled={processingId === task.id || task.creator_address === accountAddress}
                     className="w-full py-2.5 bg-zinc-900 text-white rounded-xl font-medium hover:bg-zinc-800 disabled:opacity-50 disabled:cursor-not-allowed transition-all flex items-center justify-center gap-2"
                   >
@@ -331,6 +396,49 @@ export const CampusGigs: React.FC<CampusGigsProps> = ({ accountAddress }) => {
                           <Clock className="w-3 h-3" /> {new Date(task.deadline).toLocaleDateString()}
                         </span>
                       </div>
+
+                      {/* Milestones Display */}
+                      {task.milestones && task.milestones.length > 0 && (
+                        <div className="mt-4 space-y-2 border-t border-zinc-100 pt-4">
+                          <div className="flex items-center justify-between">
+                            <p className="text-[10px] text-zinc-400 uppercase font-black tracking-widest">Project Progress</p>
+                            <p className="text-[10px] font-bold text-zinc-500">
+                              {Math.round((task.milestones.filter(m => m.completed).reduce((acc, m) => acc + m.percentage, 0)))}% Complete
+                            </p>
+                          </div>
+                          
+                          {/* Progress Bar */}
+                          <div className="w-full h-1.5 bg-zinc-100 rounded-full overflow-hidden">
+                            <motion.div 
+                              initial={{ width: 0 }}
+                              animate={{ width: `${task.milestones.filter(m => m.completed).reduce((acc, m) => acc + m.percentage, 0)}%` }}
+                              className="h-full bg-emerald-500"
+                            />
+                          </div>
+
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-2 mt-2">
+                            {task.milestones.map((ms, idx) => (
+                              <div key={idx} className="flex items-center justify-between bg-zinc-50 px-3 py-2 rounded-xl border border-zinc-100">
+                                <div className="flex items-center gap-2">
+                                  {ms.completed ? <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500" /> : <Clock className="w-3.5 h-3.5 text-zinc-300" />}
+                                  <span className={cn("text-xs font-medium", ms.completed ? "text-emerald-700 line-through" : "text-zinc-600")}>
+                                    {ms.title} ({ms.percentage}%)
+                                  </span>
+                                </div>
+                                {task.creator_address === accountAddress && task.status === 'submitted' && !ms.completed && (
+                                   <button 
+                                     onClick={() => handleApproveMilestone(task, idx)}
+                                     disabled={processingId === task.id}
+                                     className="text-[10px] font-black text-emerald-600 uppercase hover:underline disabled:opacity-50"
+                                   >
+                                     Release
+                                   </button>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
                     </div>
 
                     <div className="flex items-center gap-2">
@@ -349,20 +457,36 @@ export const CampusGigs: React.FC<CampusGigsProps> = ({ accountAddress }) => {
                               >
                                 <FileText className="w-5 h-5" />
                               </a>
-                              <button
-                                onClick={() => handleApprove(task.id, task.worker_address!, task.reward)}
-                                disabled={processingId === task.id}
-                                className="bg-emerald-600 text-white px-4 py-2 rounded-xl hover:bg-emerald-700 transition-colors flex items-center gap-2 text-sm font-medium"
-                              >
-                                {processingId === task.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
-                                Approve & Pay
-                              </button>
+                              {!task.milestones && (
+                                <button
+                                  onClick={() => handleApprove(task)}
+                                  disabled={processingId === task.id}
+                                  className="bg-emerald-600 text-white px-4 py-2 rounded-xl hover:bg-emerald-700 transition-colors flex items-center gap-2 text-sm font-medium"
+                                >
+                                  {processingId === task.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
+                                  Approve & Pay
+                                </button>
+                              )}
                             </div>
                           )}
                           {task.status === 'completed' && (
-                            <span className="text-emerald-600 flex items-center gap-1 text-sm font-medium">
-                              <DollarSign className="w-4 h-4" /> Paid
-                            </span>
+                            <div className="flex flex-col items-end gap-2">
+                              <span className="text-emerald-600 flex items-center gap-1 text-sm font-medium">
+                                <DollarSign className="w-4 h-4" /> Paid
+                              </span>
+                              {task.creator_address === accountAddress && !task.worker_rating && (
+                                <div className="space-y-1 text-right">
+                                  <p className="text-[10px] text-zinc-400 font-bold uppercase tracking-wider">Rate Worker</p>
+                                   <StarRating rating={0} onRate={(r) => handleRateWorker(task, r)} />
+                                </div>
+                              )}
+                              {task.worker_rating && (
+                                <div className="space-y-1 text-right">
+                                  <p className="text-[10px] text-zinc-400 font-bold uppercase tracking-wider">Your Rating</p>
+                                  <StarRating rating={task.worker_rating} size={3.5} />
+                                </div>
+                              )}
+                            </div>
                           )}
                         </>
                       ) : (
@@ -467,6 +591,62 @@ export const CampusGigs: React.FC<CampusGigsProps> = ({ accountAddress }) => {
                       className="w-full px-4 py-2 bg-zinc-50 border border-zinc-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-zinc-900/5"
                     />
                   </div>
+                </div>
+
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <label className="text-sm font-medium text-zinc-700">Milestones (Optional)</label>
+                    <button 
+                      type="button" 
+                      onClick={() => setNewMilestones([...newMilestones, { title: "", percentage: 0 }])}
+                      className="text-xs font-bold text-zinc-900 flex items-center gap-1 hover:underline"
+                    >
+                      <Plus className="w-3 h-3" /> Add Milestone
+                    </button>
+                  </div>
+                  {newMilestones.map((ms, idx) => (
+                    <div key={idx} className="flex gap-2 items-end bg-zinc-50 p-3 rounded-xl border border-zinc-100">
+                      <div className="flex-1">
+                        <label className="text-[10px] uppercase font-bold text-zinc-400 mb-1 block">Title</label>
+                        <input 
+                          value={ms.title} 
+                          onChange={(e) => {
+                            const updated = [...newMilestones];
+                            updated[idx].title = e.target.value;
+                            setNewMilestones(updated);
+                          }}
+                          placeholder="e.g. First Draft" 
+                          className="w-full bg-white border border-zinc-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-zinc-900"
+                        />
+                      </div>
+                      <div className="w-20">
+                        <label className="text-[10px] uppercase font-bold text-zinc-400 mb-1 block">%</label>
+                        <input 
+                          type="number" 
+                          value={ms.percentage} 
+                          onChange={(e) => {
+                            const updated = [...newMilestones];
+                            updated[idx].percentage = parseInt(e.target.value);
+                            setNewMilestones(updated);
+                          }}
+                          className="w-full bg-white border border-zinc-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-zinc-900"
+                        />
+                      </div>
+                      <button 
+                        type="button" 
+                        onClick={() => setNewMilestones(newMilestones.filter((_, i) => i !== idx))}
+                        className="p-2 text-zinc-400 hover:text-red-500 transition-colors"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    </div>
+                  ))}
+                  {newMilestones.length > 0 && (
+                    <p className={cn("text-[10px] font-bold text-right", 
+                      newMilestones.reduce((acc, m) => acc + m.percentage, 0) === 100 ? "text-emerald-500" : "text-red-500")}>
+                      Total: {newMilestones.reduce((acc, m) => acc + m.percentage, 0)}% (must be 100%)
+                    </p>
+                  )}
                 </div>
 
                 {postStatus && (

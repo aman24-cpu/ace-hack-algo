@@ -29,7 +29,9 @@ import {
   ShoppingBag,
   TrendingUp,
   Briefcase,
-  Users
+  Users,
+  Sparkles,
+  ArrowRight
 } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
 import Marketplace from "./components/Marketplace";
@@ -42,12 +44,12 @@ import {
   formatAlgo,
   AccountInfo,
   Transaction,
-  peraWallet,
-  CAMPUS_DIRECTORY,
-  Student
+  peraWallet
 } from "./services/algorandService";
 import { cn } from "./lib/utils";
 import algosdk from "algosdk";
+import { ShootingStars } from "./components/ui/shooting-stars";
+import { Header } from "./components/ui/header-3";
 
 export default function App() {
   const [accountAddress, setAccountAddress] = useState<string | null>(null);
@@ -55,7 +57,8 @@ export default function App() {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [copied, setCopied] = useState(false);
-  const [activeTab, setActiveTab] = useState<"dashboard" | "marketplace" | "gigs" | "split" | "send" | "receive" | "history" | "directory">("dashboard");
+  const [activeTab, setActiveTab] = useState<"dashboard" | "marketplace" | "gigs" | "split" | "send" | "receive" | "history">("dashboard");
+  const [showLanding, setShowLanding] = useState(true);
 
   // Send Form State
   const [recipient, setRecipient] = useState("");
@@ -63,7 +66,15 @@ export default function App() {
   const [isSending, setIsSending] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
   const [sendSuccess, setSendSuccess] = useState<string | null>(null);
-  const [searchQuery, setSearchQuery] = useState("");
+  const [notifications, setNotifications] = useState<{id: string, message: string, type: 'info' | 'success'}[]>([]);
+
+  const addNotification = (message: string, type: 'info' | 'success' = 'info') => {
+    const id = Math.random().toString(36).substr(2, 9);
+    setNotifications(prev => [...prev, { id, message, type }]);
+    setTimeout(() => {
+      setNotifications(prev => prev.filter(n => n.id !== id));
+    }, 5000);
+  };
 
   const fetchAccountData = useCallback(async (address: string) => {
     try {
@@ -84,6 +95,26 @@ export default function App() {
       }
     });
   }, [fetchAccountData]);
+
+  useEffect(() => {
+    const handleError = (event: ErrorEvent | PromiseRejectionEvent) => {
+      const error = (event as ErrorEvent).error || (event as PromiseRejectionEvent).reason;
+      const stack = error?.stack || "No stack trace";
+      console.error("GLOBAL ERROR CAPTURED:", error);
+      // Only alert if it's the specific error we're hunting
+      if (stack.includes("publicKey") || (error?.message && error.message.includes("publicKey"))) {
+        console.error("CRITICAL PUBLICKEY ERROR:", error.message, stack);
+      }
+    };
+
+    window.addEventListener('error', handleError);
+    window.addEventListener('unhandledrejection', handleError);
+    
+    return () => {
+      window.removeEventListener('error', handleError);
+      window.removeEventListener('unhandledrejection', handleError);
+    };
+  }, []);
 
   const [isConnecting, setIsConnecting] = useState(false);
 
@@ -121,6 +152,7 @@ export default function App() {
     setIsRefreshing(true);
     await fetchAccountData(accountAddress);
     setIsRefreshing(false);
+    addNotification("Dashboard updated", "info");
   };
 
   const handleCopyAddress = () => {
@@ -168,100 +200,99 @@ export default function App() {
     }
   };
 
-  const filteredDirectory = CAMPUS_DIRECTORY.filter(s => 
-    s.name.toLowerCase().includes(searchQuery.toLowerCase()) || 
-    s.major.toLowerCase().includes(searchQuery.toLowerCase())
+
+  const LandingPage = () => (
+    <div className="fixed inset-0 z-[200] bg-black overflow-hidden select-none">
+      {/* Background Stars - Static + Twinkle */}
+      <div className="absolute inset-0 stars-background opacity-40" />
+      
+      {/* Dynamic Shooting Stars */}
+      <ShootingStars 
+        starColor="#FF0000" 
+        trailColor="#FFB800" 
+        minSpeed={15} 
+        maxSpeed={35} 
+        minDelay={1000}
+        maxDelay={3000}
+      />
+      <ShootingStars 
+        starColor="#FF0099" 
+        trailColor="#FF0000" 
+        minSpeed={10} 
+        maxSpeed={25} 
+        minDelay={2000}
+        maxDelay={4000}
+      />
+
+      <div className="relative z-10 flex flex-col items-center justify-center min-h-screen text-center px-6">
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.5 }}
+          className="space-y-6"
+        >
+          <h1 className="text-5xl md:text-7xl font-black text-white tracking-tighter">
+            Welcome to <span className="text-transparent bg-clip-text bg-gradient-to-r from-red-500 to-orange-500">Campus Pay</span>
+          </h1>
+          <p className="max-w-xl mx-auto text-zinc-400 text-lg md:text-xl font-medium">
+            The ultimate decentralized ecosystem for student life. Earn, spend, and split ALGO with ease.
+          </p>
+
+          <motion.button
+            whileHover={{ scale: 1.05 }}
+            whileTap={{ scale: 0.95 }}
+            onClick={() => setShowLanding(false)}
+            className="bg-white text-zinc-900 px-12 py-6 md:px-16 md:py-8 rounded-[2rem] font-black text-xl md:text-2xl shadow-2xl hover:bg-zinc-100 transition-all flex items-center justify-center gap-4 mx-auto group mt-12"
+          >
+            Get Started
+            <ChevronRight className="w-6 h-6 group-hover:translate-x-2 transition-transform" />
+          </motion.button>
+          
+          <div className="flex justify-center gap-8 pt-16 opacity-60">
+              <div className="text-center">
+                <p className="text-2xl font-black text-white leading-tight">100%</p>
+                <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest">Decentralized</p>
+              </div>
+              <div className="w-px h-8 bg-zinc-800" />
+              <div className="text-center">
+                <p className="text-2xl font-black text-white leading-tight">0.001</p>
+                <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest">ALGO Fee</p>
+              </div>
+              <div className="w-px h-8 bg-zinc-800" />
+              <div className="text-center">
+                <p className="text-2xl font-black text-white leading-tight">Instant</p>
+                <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest">Payouts</p>
+              </div>
+          </div>
+        </motion.div>
+      </div>
+    </div>
   );
 
-  const NavItem = ({ id, icon: Icon, label }: { id: typeof activeTab, icon: any, label: string }) => (
-    <button
-      onClick={() => setActiveTab(id)}
-      className={cn(
-        "flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium transition-all w-full",
-        activeTab === id 
-          ? "bg-zinc-900 text-white shadow-lg shadow-zinc-900/10" 
-          : "text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900"
-      )}
-    >
-      <Icon className="w-4 h-4" />
-      <span>{label}</span>
-    </button>
-  );
 
   return (
-    <div className="min-h-screen bg-[#F8F9FA] flex flex-col md:flex-row">
-      {/* Sidebar - Desktop */}
-      <aside className="hidden md:flex w-64 bg-white border-r border-zinc-200 flex-col p-6 space-y-8">
-        <div className="flex items-center gap-3 px-2">
-          <div className="bg-zinc-900 p-2 rounded-xl">
-            <GraduationCap className="text-white w-6 h-6" />
-          </div>
-          <h1 className="text-xl font-bold tracking-tight text-zinc-900">CampusPay</h1>
-        </div>
+    <div className="min-h-screen bg-[#F8F9FA] flex flex-col">
+      <AnimatePresence>
+        {showLanding && (
+          <motion.div
+            key="landing"
+            exit={{ y: "-100%", opacity: 0 }}
+            transition={{ duration: 0.8, ease: [0.76, 0, 0.24, 1] }}
+            className="fixed inset-0 z-[500]"
+          >
+            <LandingPage />
+          </motion.div>
+        )}
+      </AnimatePresence>
 
-        <nav className="flex-1 space-y-1">
-          <NavItem id="dashboard" icon={CreditCard} label="Dashboard" />
-          <NavItem id="marketplace" icon={ShoppingBag} label="Marketplace" />
-          <NavItem id="gigs" icon={Briefcase} label="Campus Gigs" />
-          <NavItem id="split" icon={Users} label="Split Expenses" />
-          <NavItem id="send" icon={Send} label="Send ALGO" />
-          <NavItem id="receive" icon={QrCode} label="Receive" />
-          <NavItem id="history" icon={History} label="History" />
-          <NavItem id="directory" icon={Search} label="Directory" />
-        </nav>
-
-        <div className="pt-6 border-t border-zinc-100">
-          {accountAddress ? (
-            <button 
-              onClick={handleDisconnectWallet}
-              className="flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium text-red-500 hover:bg-red-50 transition-all w-full"
-            >
-              <LogOut className="w-4 h-4" />
-              <span>Disconnect</span>
-            </button>
-          ) : (
-            <button 
-              onClick={handleConnectWallet}
-              className="flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium bg-zinc-900 text-white hover:bg-zinc-800 transition-all w-full"
-            >
-              <Wallet className="w-4 h-4" />
-              <span>Connect Wallet</span>
-            </button>
-          )}
-        </div>
-      </aside>
+      <Header 
+        activeTab={activeTab as any} 
+        setActiveTab={setActiveTab} 
+        accountAddress={accountAddress} 
+      />
 
       {/* Main Content */}
-      <main className="flex-1 flex flex-col min-w-0">
-        {/* Top Header - Mobile & Desktop */}
-        <header className="h-16 bg-white border-b border-zinc-200 flex items-center justify-between px-6 sticky top-0 z-20">
-          <div className="md:hidden flex items-center gap-2">
-            <GraduationCap className="w-6 h-6 text-zinc-900" />
-            <span className="font-bold text-lg">CampusPay</span>
-          </div>
-          
-          <div className="hidden md:block text-sm font-medium text-zinc-500">
-            {activeTab.charAt(0).toUpperCase() + activeTab.slice(1)}
-          </div>
-
-          <div className="flex items-center gap-4">
-            <button className="p-2 text-zinc-400 hover:text-zinc-900 transition-colors">
-              <Bell className="w-5 h-5" />
-            </button>
-            {accountAddress && (
-              <div className="flex items-center gap-2 pl-4 border-l border-zinc-100">
-                <div className="w-8 h-8 rounded-full bg-zinc-100 flex items-center justify-center">
-                  <User className="w-4 h-4 text-zinc-500" />
-                </div>
-                <div className="hidden sm:block text-xs font-bold text-zinc-900">
-                  {accountAddress.slice(0, 4)}...{accountAddress.slice(-4)}
-                </div>
-              </div>
-            )}
-          </div>
-        </header>
-
-        {/* Content Area */}
+      <main className="flex-1 flex flex-col">
         <div className="flex-1 p-6 md:p-10 overflow-auto">
           {!accountAddress ? (
             <div className="h-full flex flex-col items-center justify-center max-w-md mx-auto text-center space-y-6">
@@ -282,7 +313,7 @@ export default function App() {
               </button>
             </div>
           ) : (
-            <div className="max-w-5xl mx-auto space-y-8">
+            <div className="max-w-7xl mx-auto space-y-8">
               <AnimatePresence mode="wait">
                 {activeTab === "dashboard" && (
                   <motion.div
@@ -368,18 +399,6 @@ export default function App() {
                         <h4 className="text-sm font-bold text-zinc-900 px-2">Quick Actions</h4>
                         <div className="space-y-2">
                           <button 
-                            onClick={() => setActiveTab("directory")}
-                            className="w-full flex items-center justify-between p-4 rounded-2xl hover:bg-zinc-50 transition-all group"
-                          >
-                            <div className="flex items-center gap-3">
-                              <div className="w-10 h-10 bg-blue-50 text-blue-500 rounded-xl flex items-center justify-center">
-                                <Search className="w-5 h-5" />
-                              </div>
-                              <span className="text-sm font-bold text-zinc-700">Find Student</span>
-                            </div>
-                            <ChevronRight className="w-4 h-4 text-zinc-300 group-hover:text-zinc-900 transition-colors" />
-                          </button>
-                          <button 
                             onClick={() => setActiveTab("marketplace")}
                             className="w-full flex items-center justify-between p-4 rounded-2xl hover:bg-zinc-50 transition-all group"
                           >
@@ -445,6 +464,26 @@ export default function App() {
                           })}
                           {transactions.length === 0 && <p className="text-center text-xs text-zinc-400 py-4">No recent activity</p>}
                         </div>
+                      </div>
+
+                      <div className="bg-white border border-zinc-200 rounded-[2rem] p-6 shadow-sm space-y-6 overflow-hidden relative">
+                         <div className="absolute top-0 right-0 w-24 h-24 bg-zinc-50 rounded-full -translate-y-12 translate-x-12 opacity-50" />
+                         <h4 className="text-sm font-bold text-zinc-900 px-2 flex items-center gap-2">
+                           <TrendingUp className="w-4 h-4 text-emerald-500" />
+                           Top App Sellers
+                         </h4>
+                         <div className="space-y-4 relative z-10">
+                            {[
+                               { addr: "PYFZQHIS...FJMZUI", vol: 450 },
+                               { addr: "A7H2B4K9...L3M8N1", vol: 280 },
+                               { addr: "ZK9P0O1I...Q2W3E4", vol: 150 }
+                            ].map((s, i) => (
+                              <div key={i} className="flex items-center justify-between p-3 bg-zinc-50 rounded-xl">
+                                <span className="text-xs font-mono font-bold text-zinc-600 truncate max-w-[120px]">{s.addr}</span>
+                                <span className="text-xs font-black text-zinc-900">{s.vol} ALGO</span>
+                              </div>
+                            ))}
+                         </div>
                       </div>
                     </div>
                   </motion.div>
@@ -662,90 +701,32 @@ export default function App() {
                     </div>
                   </motion.div>
                 )}
-
-                {activeTab === "directory" && (
-                  <motion.div
-                    key="directory"
-                    initial={{ opacity: 0, y: 10 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    exit={{ opacity: 0, y: -10 }}
-                    className="space-y-8"
-                  >
-                    <div className="space-y-4">
-                      <div className="space-y-1">
-                        <h3 className="text-2xl font-bold text-zinc-900 tracking-tight">Campus Directory</h3>
-                        <p className="text-sm text-zinc-500">Find students and merchants to pay instantly.</p>
-                      </div>
-                      <div className="relative">
-                        <Search className="absolute left-5 top-1/2 -translate-y-1/2 text-zinc-400 w-5 h-5" />
-                        <input 
-                          type="text"
-                          value={searchQuery}
-                          onChange={(e) => setSearchQuery(e.target.value)}
-                          placeholder="Search by name, major, or merchant..."
-                          className="w-full pl-14 pr-6 py-4 rounded-2xl bg-white border border-zinc-200 focus:ring-4 focus:ring-zinc-900/5 focus:border-zinc-900 outline-none transition-all font-medium"
-                        />
-                      </div>
-                    </div>
-
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      {filteredDirectory.map((student, idx) => (
-                        <button
-                          key={idx}
-                          onClick={() => {
-                            setRecipient(student.address);
-                            setActiveTab("send");
-                          }}
-                          className="flex items-center gap-4 p-5 bg-white border border-zinc-200 rounded-[2rem] hover:border-zinc-900 hover:shadow-xl hover:shadow-zinc-900/5 transition-all text-left group"
-                        >
-                          <img 
-                            src={student.avatar} 
-                            alt={student.name} 
-                            className="w-14 h-14 rounded-2xl object-cover grayscale group-hover:grayscale-0 transition-all"
-                            referrerPolicy="no-referrer"
-                          />
-                          <div className="flex-1 min-w-0">
-                            <h4 className="font-bold text-zinc-900 truncate">{student.name}</h4>
-                            <p className="text-xs text-zinc-500">{student.major}</p>
-                          </div>
-                          <div className="w-10 h-10 rounded-xl bg-zinc-50 flex items-center justify-center text-zinc-400 group-hover:bg-zinc-900 group-hover:text-white transition-all">
-                            <Send className="w-4 h-4" />
-                          </div>
-                        </button>
-                      ))}
-                    </div>
-                  </motion.div>
-                )}
               </AnimatePresence>
             </div>
           )}
         </div>
       </main>
 
-      {/* Mobile Bottom Nav */}
-      <nav className="md:hidden bg-white border-t border-zinc-200 px-4 py-2 flex justify-around items-center sticky bottom-0 z-30">
-        <button onClick={() => setActiveTab("dashboard")} className={cn("p-3 rounded-xl transition-all", activeTab === "dashboard" ? "bg-zinc-900 text-white" : "text-zinc-400")}>
-          <CreditCard className="w-6 h-6" />
-        </button>
-        <button onClick={() => setActiveTab("marketplace")} className={cn("p-3 rounded-xl transition-all", activeTab === "marketplace" ? "bg-zinc-900 text-white" : "text-zinc-400")}>
-          <ShoppingBag className="w-6 h-6" />
-        </button>
-        <button onClick={() => setActiveTab("gigs")} className={cn("p-3 rounded-xl transition-all", activeTab === "gigs" ? "bg-zinc-900 text-white" : "text-zinc-400")}>
-          <Briefcase className="w-6 h-6" />
-        </button>
-        <button onClick={() => setActiveTab("split")} className={cn("p-3 rounded-xl transition-all", activeTab === "split" ? "bg-zinc-900 text-white" : "text-zinc-400")}>
-          <Users className="w-6 h-6" />
-        </button>
-        <button onClick={() => setActiveTab("send")} className={cn("p-3 rounded-xl transition-all", activeTab === "send" ? "bg-zinc-900 text-white" : "text-zinc-400")}>
-          <Send className="w-6 h-6" />
-        </button>
-        <button onClick={() => setActiveTab("receive")} className={cn("p-3 rounded-xl transition-all", activeTab === "receive" ? "bg-zinc-900 text-white" : "text-zinc-400")}>
-          <QrCode className="w-6 h-6" />
-        </button>
-        <button onClick={() => setActiveTab("history")} className={cn("p-3 rounded-xl transition-all", activeTab === "history" ? "bg-zinc-900 text-white" : "text-zinc-400")}>
-          <History className="w-6 h-6" />
-        </button>
-      </nav>
+      {/* Notifications Toast */}
+      <div className="fixed top-20 right-6 z-[100] flex flex-col gap-3 pointer-events-none">
+        <AnimatePresence>
+          {notifications.map(n => (
+            <motion.div
+              key={n.id}
+              initial={{ opacity: 0, x: 20, scale: 0.9 }}
+              animate={{ opacity: 1, x: 0, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.9, transition: { duration: 0.2 } }}
+              className={cn(
+                "p-4 rounded-2xl shadow-2xl border flex items-center gap-3 min-w-[280px] pointer-events-auto backdrop-blur-md",
+                n.type === 'success' ? "bg-emerald-500/90 text-white border-emerald-400" : "bg-white/90 text-zinc-900 border-zinc-100"
+              )}
+            >
+              {n.type === 'success' ? <Check className="w-5 h-5" /> : <Bell className="w-5 h-5 text-zinc-400" />}
+              <span className="text-sm font-bold">{n.message}</span>
+            </motion.div>
+          ))}
+        </AnimatePresence>
+      </div>
     </div>
   );
 }
